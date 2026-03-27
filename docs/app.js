@@ -91,12 +91,13 @@
         str = String(str);
         if (str.length >= width) return str.substring(0, width);
         const diff = width - str.length;
-        if (align === "right") return " ".repeat(diff) + str;
+        const sp = "\u00A0"; // non-breaking space
+        if (align === "right") return sp.repeat(diff) + str;
         if (align === "center") {
             const left = Math.floor(diff / 2);
-            return " ".repeat(left) + str + " ".repeat(diff - left);
+            return sp.repeat(left) + str + sp.repeat(diff - left);
         }
-        return str + " ".repeat(diff);
+        return str + sp.repeat(diff);
     }
 
     function wrapText(text, width) {
@@ -123,7 +124,7 @@
         { w: 9, html: `  ${s("c-dim", "todobot")}` },
     ];
     const ROBOT_W = 9;
-    const ROBOT_BLANK = " ".repeat(ROBOT_W);
+    const ROBOT_BLANK = "\u00A0".repeat(ROBOT_W);
 
     function renderTable() {
         if (tasks.length === 0) {
