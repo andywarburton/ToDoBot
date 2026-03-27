@@ -34,6 +34,10 @@
     function saveTasks() {
         localStorage.setItem("todobot_tasks", JSON.stringify(allTasks));
         tasks = allTasks.filter(t => !t.deleted);
+        // Auto-push to gist if configured
+        if (config.token && config.gist_id) {
+            gistPush().catch(() => {});
+        }
     }
 
     function nextId() {

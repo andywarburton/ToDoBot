@@ -84,6 +84,24 @@ def _save_tasks(tasks):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with open(DATA_FILE, "w") as f:
         json.dump(tasks, f, indent=2)
+    # Auto-push to gist if configured
+    _auto_push()
+
+def _auto_push():
+    """Silently push to gist if configured. Failures are ignored."""
+    config = _load_config()
+    if not config.get("gist_id"):
+        return
+    ok, _ = _gh_available()
+    if not ok:
+        return
+    try:
+        subprocess.run(
+            ["gh", "gist", "edit", config["gist_id"], "-f", "tasks.json", str(DATA_FILE)],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        pass
 
 def _next_id(tasks):
     all_tasks = _load_all_tasks()
