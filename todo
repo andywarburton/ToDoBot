@@ -614,7 +614,7 @@ def _select_action():
         ("d", "Mark task as done",  BRIGHT_YELLOW),
         ("r", "Remove a task",      BRIGHT_RED),
         ("s", "Sync",               BRIGHT_MAGENTA),
-        ("l", "List tasks",         BRIGHT_CYAN),
+        ("l", "List tasks (refresh)", BRIGHT_CYAN),
         ("q", "Quit",               DIM),
     ]
     for key, label, color in actions:

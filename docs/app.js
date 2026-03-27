@@ -357,7 +357,7 @@
         print(`    ${s("c-cyan", "[")}${s("c-bright-white", "d")}${s("c-cyan", "]")}  ${s("c-bright-yellow", "Mark task as done")}`);
         print(`    ${s("c-cyan", "[")}${s("c-bright-white", "r")}${s("c-cyan", "]")}  ${s("c-bright-red", "Remove a task")}`);
         print(`    ${s("c-cyan", "[")}${s("c-bright-white", "s")}${s("c-cyan", "]")}  ${s("c-bright-magenta", "Sync")}`);
-        print(`    ${s("c-cyan", "[")}${s("c-bright-white", "l")}${s("c-cyan", "]")}  ${s("c-cyan", "Refresh list")}`);
+        print(`    ${s("c-cyan", "[")}${s("c-bright-white", "l")}${s("c-cyan", "]")}  ${s("c-cyan", "List tasks (refresh)")}`);
         print("");
         print(`  ${s("c-dim", "Tip: type")} d 3 ${s("c-dim", "or")} r 5 ${s("c-dim", "for quick actions")}`);
         print("");
