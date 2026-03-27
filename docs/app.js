@@ -10,7 +10,8 @@
     const input = document.getElementById("input");
 
     // ── State ────────────────────────────────────────────────────────────────
-    let tasks = [];
+    let allTasks = []; // includes soft-deleted (for sync)
+    let tasks = [];    // visible tasks (filtered)
     let config = {}; // { gist_id, token }
     let inputCallback = null;
 
@@ -25,17 +26,19 @@
     }
 
     function loadTasks() {
-        try { tasks = JSON.parse(localStorage.getItem("todobot_tasks") || "[]"); }
-        catch { tasks = []; }
+        try { allTasks = JSON.parse(localStorage.getItem("todobot_tasks") || "[]"); }
+        catch { allTasks = []; }
+        tasks = allTasks.filter(t => !t.deleted);
     }
 
     function saveTasks() {
-        localStorage.setItem("todobot_tasks", JSON.stringify(tasks));
+        localStorage.setItem("todobot_tasks", JSON.stringify(allTasks));
+        tasks = allTasks.filter(t => !t.deleted);
     }
 
     function nextId() {
-        if (tasks.length === 0) return 1;
-        return Math.max(...tasks.map(t => t.id)) + 1;
+        if (allTasks.length === 0) return 1;
+        return Math.max(...allTasks.map(t => t.id)) + 1;
     }
 
     // ── Output helpers ───────────────────────────────────────────────────────
@@ -232,6 +235,28 @@
         print("");
     }
 
+    // ── Merge ─────────────────────────────────────────────────────────────────
+    function mergeTasks(local, remote) {
+        const localById = {};
+        local.forEach(t => localById[t.id] = t);
+        const remoteById = {};
+        remote.forEach(t => remoteById[t.id] = t);
+        const allIds = new Set([...Object.keys(localById), ...Object.keys(remoteById)].map(Number));
+        const merged = [];
+        for (const id of [...allIds].sort((a, b) => a - b)) {
+            const lt = localById[id];
+            const rt = remoteById[id];
+            if (lt && !rt) { merged.push(lt); }
+            else if (rt && !lt) { merged.push(rt); }
+            else {
+                const lMod = lt.modified || lt.created || "";
+                const rMod = rt.modified || rt.created || "";
+                merged.push(lMod >= rMod ? lt : rt);
+            }
+        }
+        return merged;
+    }
+
     // ── Gist API ─────────────────────────────────────────────────────────────
     async function gistPush() {
         if (!config.token || !config.gist_id) return { ok: false, err: "Not configured" };
@@ -239,7 +264,7 @@
             const resp = await fetch(`https://api.github.com/gists/${config.gist_id}`, {
                 method: "PATCH",
                 headers: { "Authorization": `token ${config.token}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ files: { "tasks.json": { content: JSON.stringify(tasks, null, 2) } } }),
+                body: JSON.stringify({ files: { "tasks.json": { content: JSON.stringify(allTasks, null, 2) } } }),
             });
             if (!resp.ok) return { ok: false, err: `HTTP ${resp.status}` };
             return { ok: true };
@@ -256,7 +281,8 @@
             const data = await resp.json();
             const file = data.files["tasks.json"];
             if (!file) return { ok: false, err: "No tasks.json in gist" };
-            tasks = JSON.parse(file.content);
+            const remoteTasks = JSON.parse(file.content);
+            allTasks = mergeTasks(allTasks, remoteTasks);
             saveTasks();
             return { ok: true };
         } catch (e) { return { ok: false, err: e.message }; }
@@ -270,7 +296,7 @@
                 headers: { "Authorization": `token ${config.token}`, "Content-Type": "application/json" },
                 body: JSON.stringify({
                     description: "ToDoBot tasks", public: false,
-                    files: { "tasks.json": { content: JSON.stringify(tasks, null, 2) } }
+                    files: { "tasks.json": { content: JSON.stringify(allTasks, null, 2) } }
                 }),
             });
             if (!resp.ok) return { ok: false, err: `HTTP ${resp.status}` };
@@ -415,7 +441,8 @@
                     if (!text || !text.trim()) { redraw(); return; }
                 }
                 const id = nextId();
-                tasks.push({ id, text: text.trim(), done: false, created: new Date().toISOString() });
+                const now = new Date().toISOString();
+                allTasks.push({ id, text: text.trim(), done: false, created: now, modified: now });
                 saveTasks();
                 redraw(`  ${s("c-bright-green", "✔")} Added task ${s("c-magenta", "#" + id)}: ${s("c-bright-white", text.trim())}\n`);
                 break;
@@ -434,10 +461,11 @@
                 }
                 const tid = parseInt(tidStr.trim(), 10);
                 if (isNaN(tid)) { redraw(`  ${s("c-bright-red", "✘")}  Please enter a valid task ID.\n`); return; }
-                const task = tasks.find(t => t.id === tid);
+                const task = allTasks.find(t => !t.deleted && t.id === tid);
                 if (!task) { redraw(`  ${s("c-bright-red", "✘")}  Task ${s("c-magenta", "#" + tid)} not found.\n`); return; }
                 if (task.done) { redraw(`  ${s("c-bright-yellow", "⚠")}  Task ${s("c-magenta", "#" + tid)} is already done.\n`); return; }
                 task.done = true;
+                task.modified = new Date().toISOString();
                 saveTasks();
                 redraw(`  ${s("c-bright-green", "✔")}  Nice! Completed ${s("c-magenta", "#" + tid)}: ${s("c-dim c-strike", task.text)}\n`);
                 break;
@@ -456,11 +484,12 @@
                 }
                 const tid = parseInt(tidStr.trim(), 10);
                 if (isNaN(tid)) { redraw(`  ${s("c-bright-red", "✘")}  Please enter a valid task ID.\n`); return; }
-                const idx = tasks.findIndex(t => t.id === tid);
-                if (idx === -1) { redraw(`  ${s("c-bright-red", "✘")}  Task ${s("c-magenta", "#" + tid)} not found.\n`); return; }
-                const removed = tasks.splice(idx, 1)[0];
+                const task = allTasks.find(t => !t.deleted && t.id === tid);
+                if (!task) { redraw(`  ${s("c-bright-red", "✘")}  Task ${s("c-magenta", "#" + tid)} not found.\n`); return; }
+                task.deleted = true;
+                task.modified = new Date().toISOString();
                 saveTasks();
-                redraw(`  ${s("c-bright-red", "🗑")}  Removed ${s("c-magenta", "#" + tid)}: ${s("c-dim", removed.text)}\n`);
+                redraw(`  ${s("c-bright-red", "🗑")}  Removed ${s("c-magenta", "#" + tid)}: ${s("c-dim", task.text)}\n`);
                 break;
             }
 
@@ -491,7 +520,7 @@
                     return;
                 }
 
-                // Default: push or setup
+                // Default: pull (merge) then push, or setup
                 if (!config.token || !config.gist_id) {
                     clear();
                     renderTable();
@@ -500,13 +529,24 @@
                     loadConfig();
                     if (!config.token || !config.gist_id) return;
                 }
+                // Pull first to merge
+                const spPull = showSpinner("Pulling from gist...");
+                await gistPull();
+                hideSpinner(spPull);
+                // Then push merged result
                 const sp = showSpinner("Pushing to gist...");
                 const result = await gistPush();
                 hideSpinner(sp);
-                if (result.ok) { redraw(`  ${s("c-bright-green", "✔")}  Synced to gist\n`); }
+                if (result.ok) { redraw(`  ${s("c-bright-green", "✔")}  Synced with gist\n`); }
                 else { redraw(`  ${s("c-bright-red", "✘")}  ${result.err}\n`); }
                 break;
             }
+
+            case "l":
+            case "ls":
+            case "list":
+                redraw();
+                break;
 
             case "clear":
             case "cls":
@@ -519,6 +559,7 @@
                 print("");
                 print(`  ${s("c-bold c-bright-white", "COMMANDS")}`);
                 print(`    ${s("c-cyan", "a")} ${s("c-dim", "/ add")}             add a new task`);
+                print(`    ${s("c-cyan", "l")} ${s("c-dim", "/ ls")}              list tasks`);
                 print(`    ${s("c-cyan", "d")} ${s("c-dim", "/ done")} ${s("c-dim", "<id>")}       mark a task as done`);
                 print(`    ${s("c-cyan", "r")} ${s("c-dim", "/ rm")} ${s("c-dim", "<id>")}         remove a task`);
                 print(`    ${s("c-cyan", "s")} ${s("c-dim", "/ sync")}            push to gist`);

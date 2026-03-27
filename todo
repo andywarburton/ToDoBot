@@ -69,11 +69,16 @@ ROBOT_SMALL = f"""{BRIGHT_GREEN}  ┌─┤ ├─┐{RESET}  {BOLD}{BRIGHT_WHIT
 """
 
 # ── Data layer ───────────────────────────────────────────────────────────────
-def _load_tasks():
+def _load_all_tasks():
+    """Load all tasks including soft-deleted ones (for sync)."""
     if not DATA_FILE.exists():
         return []
     with open(DATA_FILE, "r") as f:
         return json.load(f)
+
+def _load_tasks():
+    """Load tasks, filtering out soft-deleted ones."""
+    return [t for t in _load_all_tasks() if not t.get("deleted")]
 
 def _save_tasks(tasks):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -81,9 +86,10 @@ def _save_tasks(tasks):
         json.dump(tasks, f, indent=2)
 
 def _next_id(tasks):
-    if not tasks:
+    all_tasks = _load_all_tasks()
+    if not all_tasks:
         return 1
-    return max(t["id"] for t in tasks) + 1
+    return max(t["id"] for t in all_tasks) + 1
 
 # ── Config layer ─────────────────────────────────────────────────────────────
 def _load_config():
@@ -175,8 +181,28 @@ def _sync_push():
         return False, f"Push failed: {r.stderr.strip()}"
     return True, None
 
+def _merge_tasks(local, remote):
+    """Merge local and remote task lists by ID. Newest modified wins."""
+    local_by_id = {t["id"]: t for t in local}
+    remote_by_id = {t["id"]: t for t in remote}
+    all_ids = set(local_by_id.keys()) | set(remote_by_id.keys())
+    merged = []
+    for tid in sorted(all_ids):
+        lt = local_by_id.get(tid)
+        rt = remote_by_id.get(tid)
+        if lt and not rt:
+            merged.append(lt)
+        elif rt and not lt:
+            merged.append(rt)
+        else:
+            # Both exist — keep the one modified more recently
+            l_mod = lt.get("modified", lt.get("created", ""))
+            r_mod = rt.get("modified", rt.get("created", ""))
+            merged.append(lt if l_mod >= r_mod else rt)
+    return merged
+
 def _sync_pull():
-    """Pull tasks.json from the configured gist."""
+    """Pull tasks.json from the configured gist and merge with local."""
     config = _load_config()
     gist_id = config.get("gist_id")
     if not gist_id:
@@ -201,11 +227,13 @@ def _sync_pull():
         return False, f"Pull failed: {r.stderr.strip()}"
 
     try:
-        tasks = json.loads(r.stdout)
+        remote_tasks = json.loads(r.stdout)
     except json.JSONDecodeError:
         return False, "Remote data is not valid JSON"
 
-    _save_tasks(tasks)
+    local_tasks = _load_all_tasks()
+    merged = _merge_tasks(local_tasks, remote_tasks)
+    _save_tasks(merged)
     return True, None
 
 def _setup_gist():
@@ -292,7 +320,7 @@ def cmd_sync(sub=None):
             print(f"  {BRIGHT_RED}✘{RESET}  {err}\n")
         return
 
-    # Default: push (or setup if no gist)
+    # Default: pull (merge) then push (or setup if no gist)
     if not gist_id:
         if not _setup_gist():
             return
@@ -301,9 +329,14 @@ def cmd_sync(sub=None):
         if not gist_id:
             return
 
+    # Pull first to merge remote changes
+    pull_ok, pull_err = _sync_pull()
+    if not pull_ok:
+        print(f"  {BRIGHT_YELLOW}⚠{RESET}  Pull failed: {DIM}{pull_err}{RESET}")
+
     ok, err = _sync_push()
     if ok:
-        print(f"  {BRIGHT_GREEN}✔{RESET}  Pushed to gist\n")
+        print(f"  {BRIGHT_GREEN}✔{RESET}  Synced with gist\n")
     else:
         print(f"  {BRIGHT_RED}✘{RESET}  {err}\n")
 
@@ -473,13 +506,15 @@ def _print_table(tasks, show_done=True):
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 def cmd_add(text):
-    tasks = _load_tasks()
+    tasks = _load_all_tasks()
     new_id = _next_id(tasks)
+    now = datetime.now().isoformat()
     task = {
         "id": new_id,
         "text": text,
         "done": False,
-        "created": datetime.now().isoformat(),
+        "created": now,
+        "modified": now,
     }
     tasks.append(task)
     _save_tasks(tasks)
@@ -490,25 +525,31 @@ def cmd_list():
     _print_table(tasks)
 
 def cmd_done(task_id):
-    tasks = _load_tasks()
+    tasks = _load_all_tasks()
     for t in tasks:
+        if t.get("deleted"):
+            continue
         if t["id"] == task_id:
             if t["done"]:
                 print(f"\n  {BRIGHT_YELLOW}⚠{RESET}  Task {BRIGHT_MAGENTA}#{task_id}{RESET} is already done.\n")
                 return
             t["done"] = True
+            t["modified"] = datetime.now().isoformat()
             _save_tasks(tasks)
             print(f"\n  {BRIGHT_GREEN}✔{RESET}  Nice! Completed {BRIGHT_MAGENTA}#{task_id}{RESET}: {DIM}{STRIKE}{t['text']}{RESET}\n")
             return
     print(f"\n  {BRIGHT_RED}✘{RESET}  Task {BRIGHT_MAGENTA}#{task_id}{RESET} not found.\n")
 
 def cmd_remove(task_id):
-    tasks = _load_tasks()
-    for i, t in enumerate(tasks):
+    tasks = _load_all_tasks()
+    for t in tasks:
+        if t.get("deleted"):
+            continue
         if t["id"] == task_id:
-            removed = tasks.pop(i)
+            t["deleted"] = True
+            t["modified"] = datetime.now().isoformat()
             _save_tasks(tasks)
-            print(f"\n  {BRIGHT_RED}🗑{RESET}  Removed {BRIGHT_MAGENTA}#{task_id}{RESET}: {DIM}{removed['text']}{RESET}\n")
+            print(f"\n  {BRIGHT_RED}🗑{RESET}  Removed {BRIGHT_MAGENTA}#{task_id}{RESET}: {DIM}{t['text']}{RESET}\n")
             return
     print(f"\n  {BRIGHT_RED}✘{RESET}  Task {BRIGHT_MAGENTA}#{task_id}{RESET} not found.\n")
 
@@ -637,13 +678,15 @@ def interactive():
             else:
                 text = _input_prompt("What do you need to do? ")
             if text and text.strip():
-                tasks = _load_tasks()
+                tasks = _load_all_tasks()
                 new_id = _next_id(tasks)
+                now = datetime.now().isoformat()
                 task = {
                     "id": new_id,
                     "text": text.strip(),
                     "done": False,
-                    "created": datetime.now().isoformat(),
+                    "created": now,
+                    "modified": now,
                 }
                 tasks.append(task)
                 _save_tasks(tasks)
@@ -669,15 +712,18 @@ def interactive():
             except ValueError:
                 _redraw(f"  {BRIGHT_RED}✘{RESET}  Please enter a valid task ID.\n")
                 continue
-            tasks = _load_tasks()
+            tasks = _load_all_tasks()
             found = False
             for t in tasks:
+                if t.get("deleted"):
+                    continue
                 if t["id"] == tid:
                     found = True
                     if t["done"]:
                         _redraw(f"  {BRIGHT_YELLOW}⚠{RESET}  Task {BRIGHT_MAGENTA}#{tid}{RESET} is already done.\n")
                     else:
                         t["done"] = True
+                        t["modified"] = datetime.now().isoformat()
                         _save_tasks(tasks)
                         _redraw(f"  {BRIGHT_GREEN}✔{RESET}  Nice! Completed {BRIGHT_MAGENTA}#{tid}{RESET}: {DIM}{STRIKE}{t['text']}{RESET}\n")
                     break
@@ -701,14 +747,17 @@ def interactive():
             except ValueError:
                 _redraw(f"  {BRIGHT_RED}✘{RESET}  Please enter a valid task ID.\n")
                 continue
-            tasks = _load_tasks()
+            tasks = _load_all_tasks()
             found = False
-            for i, t in enumerate(tasks):
+            for t in tasks:
+                if t.get("deleted"):
+                    continue
                 if t["id"] == tid:
                     found = True
-                    removed = tasks.pop(i)
+                    t["deleted"] = True
+                    t["modified"] = datetime.now().isoformat()
                     _save_tasks(tasks)
-                    _redraw(f"  {BRIGHT_RED}🗑{RESET}  Removed {BRIGHT_MAGENTA}#{tid}{RESET}: {DIM}{removed['text']}{RESET}\n")
+                    _redraw(f"  {BRIGHT_RED}🗑{RESET}  Removed {BRIGHT_MAGENTA}#{tid}{RESET}: {DIM}{t['text']}{RESET}\n")
                     break
             if not found:
                 _redraw(f"  {BRIGHT_RED}✘{RESET}  Task {BRIGHT_MAGENTA}#{tid}{RESET} not found.\n")
