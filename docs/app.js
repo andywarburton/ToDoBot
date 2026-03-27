@@ -467,8 +467,13 @@
         print(`\n  ${s("c-bold c-bright-white", "Gist sync setup")}\n`);
 
         if (!config.token) {
-            print(`  You need a GitHub Personal Access Token with ${s("c-bold", "gist")} scope.`);
-            print(`  Create one at: ${s("c-blue", "https://github.com/settings/tokens")}\n`);
+            print(`  ${s("c-bold c-bright-white", "How to create a token:")}`);
+            print(`  ${s("c-dim", "1.")} Go to <a href="https://github.com/settings/tokens" target="_blank">github.com/settings/tokens</a>`);
+            print(`  ${s("c-dim", "2.")} Click ${s("c-bright-white", "Generate new token")} → ${s("c-bright-white", "classic")}`);
+            print(`  ${s("c-dim", "3.")} Name it something like ${s("c-bright-white", '"ToDoBot"')}`);
+            print(`  ${s("c-dim", "4.")} Tick only the ${s("c-bold", "gist")} scope`);
+            print(`  ${s("c-dim", "5.")} Click ${s("c-bright-white", "Generate token")} and copy it`);
+            print("");
             const token = await promptSecret("Paste your token: ");
             if (!token || !token.trim()) {
                 print(`  ${s("c-dim", "Cancelled.")}\n`);
