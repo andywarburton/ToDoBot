@@ -153,7 +153,12 @@ SHELL_RC=""
 if [ -n "$ZSH_VERSION" ] || [ "$(basename "$SHELL")" = "zsh" ]; then
     SHELL_RC="$HOME/.zshrc"
 elif [ -n "$BASH_VERSION" ] || [ "$(basename "$SHELL")" = "bash" ]; then
-    SHELL_RC="$HOME/.bash_profile"
+    # On Linux, interactive terminals source .bashrc not .bash_profile
+    if [ "$(uname)" = "Linux" ] && [ -f "$HOME/.bashrc" ]; then
+        SHELL_RC="$HOME/.bashrc"
+    else
+        SHELL_RC="$HOME/.bash_profile"
+    fi
 fi
 
 if echo "$PATH" | tr ':' '\n' | grep -qx "$LINK_DIR"; then
