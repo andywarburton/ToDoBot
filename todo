@@ -201,6 +201,10 @@ def _sync_push():
 
 def _merge_tasks(local, remote):
     """Merge local and remote task lists by ID. Newest modified wins."""
+    def _ts(t):
+        s = t.get("modified", t.get("created", ""))
+        return s.replace("Z", "+00:00") if s else ""
+
     local_by_id = {t["id"]: t for t in local}
     remote_by_id = {t["id"]: t for t in remote}
     all_ids = set(local_by_id.keys()) | set(remote_by_id.keys())
@@ -213,10 +217,7 @@ def _merge_tasks(local, remote):
         elif rt and not lt:
             merged.append(rt)
         else:
-            # Both exist — keep the one modified more recently
-            l_mod = lt.get("modified", lt.get("created", ""))
-            r_mod = rt.get("modified", rt.get("created", ""))
-            merged.append(lt if l_mod >= r_mod else rt)
+            merged.append(lt if _ts(lt) >= _ts(rt) else rt)
     return merged
 
 def _sync_pull():
@@ -366,8 +367,11 @@ def _term_width():
         return 80
 
 def _relative_date(iso_str):
-    created = datetime.fromisoformat(iso_str)
-    now = datetime.now()
+    try:
+        created = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        now = datetime.now(created.tzinfo)
+    except (ValueError, TypeError):
+        return "?"
     delta = now - created
     if delta.days == 0:
         hours = delta.seconds // 3600
