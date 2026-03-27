@@ -1,10 +1,12 @@
-# todobot
+# ToDoBot
 
 ```
   ┌─┤ ├─┐
   │ ◉ ◉ │   your friendly terminal task manager
   └┬─┬─┬┘
 ```
+
+> **Disclaimer:** This is vibe coded slop but it actually works quite well.
 
 A simple, colourful todo list that runs entirely in the terminal. Written in Python 3 with zero dependencies — just the standard library.
 
@@ -18,8 +20,8 @@ A simple, colourful todo list that runs entirely in the terminal. Written in Pyt
 ## Install
 
 ```sh
-git clone <this-repo-url> ~/todobot
-cd ~/todobot
+git clone https://github.com/andywarburton/ToDoBot.git ~/ToDoBot
+cd ~/ToDoBot
 ./install.sh
 ```
 
@@ -60,7 +62,7 @@ a walk dog    add "walk dog"
 Tasks sync to a **private** GitHub Gist via the `gh` CLI. On first run of `todo sync`, you'll be asked to either create a new gist or enter an existing gist ID. The wizard auto-pulls on open and auto-pushes on quit.
 
 To set up on a new device:
-1. Install todobot and `gh` using `install.sh`
+1. Install ToDoBot and `gh` using `install.sh`
 2. Run `todo sync` and choose **Enter an existing gist ID**
 3. Paste the gist ID from your other device (`todo sync status` to find it)
 
