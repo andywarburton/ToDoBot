@@ -318,6 +318,8 @@
     }
 
     function printMenu() {
+        print("");
+        print("");
         print(`  ${s("c-bold c-bright-white", "What would you like to do?")}`);
         print("");
         print(`    ${s("c-cyan", "[")}${s("c-bright-white", "a")}${s("c-cyan", "]")}  ${s("c-bright-green", "Add a new task")}`);
