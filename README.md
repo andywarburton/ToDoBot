@@ -26,7 +26,7 @@ Also available as a **web app** at [andywarburton.github.io/ToDoBot](https://and
 ```sh
 git clone https://github.com/andywarburton/ToDoBot.git ~/ToDoBot
 cd ~/ToDoBot
-./install.sh
+source ./install.sh
 ```
 
 The installer will:

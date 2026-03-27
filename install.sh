@@ -1,9 +1,8 @@
 #!/bin/bash
 #
 # install.sh — set up todobot
+# Run with: source ./install.sh
 #
-
-set -e
 
 CYAN="\033[96m"
 GREEN="\033[92m"
@@ -14,7 +13,12 @@ BOLD="\033[1m"
 WHITE="\033[97m"
 RESET="\033[0m"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Detect script directory (works when sourced or executed)
+if [ -n "$BASH_SOURCE" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "$BASH_SOURCE")" && pwd)"
+else
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+fi
 TODO_BIN="$SCRIPT_DIR/todo"
 LINK_DIR="$HOME/.local/bin"
 LINK_PATH="$LINK_DIR/todo"
@@ -173,12 +177,14 @@ else
             echo '# todobot' >> "$SHELL_RC"
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
             echo -e "  ${GREEN}✔${RESET}  Added ${DIM}~/.local/bin${RESET} to PATH in ${DIM}$(basename "$SHELL_RC")${RESET}"
-            echo -e "  ${YELLOW}⚠${RESET}  Run ${CYAN}source ${SHELL_RC}${RESET} or open a new terminal to pick it up"
         fi
     else
         echo -e "  ${YELLOW}⚠${RESET}  Add ${DIM}~/.local/bin${RESET} to your PATH manually"
     fi
 fi
+
+# Export PATH for current session (works when run via: source ./install.sh)
+export PATH="$HOME/.local/bin:$PATH"
 
 echo ""
 echo -e "  ${GREEN}${BOLD}All set!${RESET} Try it out:"
