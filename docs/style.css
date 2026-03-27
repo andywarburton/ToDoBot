@@ -29,8 +29,9 @@ body {
 #output {
     flex: 1;
     overflow-y: auto;
-    white-space: pre-wrap;
+    white-space: pre;
     word-wrap: break-word;
+    overflow-wrap: break-word;
     padding-bottom: 8px;
 }
 
