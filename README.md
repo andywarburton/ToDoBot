@@ -10,12 +10,14 @@
 
 A simple, colourful todo list that runs entirely in the terminal. Written in Python 3 with zero dependencies — just the standard library.
 
+Also available as a **web app** at [andywarburton.github.io/ToDoBot](https://andywarburton.github.io/ToDoBot/) — same terminal look and feel, syncs with the same gist.
+
 ## Features
 
 - **Quick CLI commands** — `todo add "task"`, `todo ls`, `todo done 3`, `todo rm 3`
 - **Interactive wizard** — just type `todo` for a menu-driven interface
 - **Cloud sync** — sync tasks across devices via a private GitHub Gist
-- **Looks good** — colour-coded table, box-drawing borders, progress bar, ASCII robot buddy
+- **Web version** — same terminal UI in the browser via GitHub Pages
 
 ## Install
 
