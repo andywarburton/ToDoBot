@@ -1,0 +1,781 @@
+#!/usr/bin/env python3
+"""
+todo — a friendly terminal task manager
+No dependencies beyond Python 3 stdlib.
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import textwrap
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+
+# ── Paths ────────────────────────────────────────────────────────────────────
+DATA_DIR = Path.home() / ".todo"
+DATA_FILE = DATA_DIR / "tasks.json"
+CONFIG_FILE = DATA_DIR / "config.json"
+
+# ── ANSI colours & styles ────────────────────────────────────────────────────
+RESET   = "\033[0m"
+BOLD    = "\033[1m"
+DIM     = "\033[2m"
+ITALIC  = "\033[3m"
+ULINE   = "\033[4m"
+STRIKE  = "\033[9m"
+
+BLACK   = "\033[30m"
+RED     = "\033[31m"
+GREEN   = "\033[32m"
+YELLOW  = "\033[33m"
+BLUE    = "\033[34m"
+MAGENTA = "\033[35m"
+CYAN    = "\033[36m"
+WHITE   = "\033[37m"
+
+BG_BLACK   = "\033[40m"
+BG_RED     = "\033[41m"
+BG_GREEN   = "\033[42m"
+BG_YELLOW  = "\033[43m"
+BG_BLUE    = "\033[44m"
+BG_MAGENTA = "\033[45m"
+BG_CYAN    = "\033[46m"
+BG_WHITE   = "\033[47m"
+
+BRIGHT_BLACK   = "\033[90m"
+BRIGHT_RED     = "\033[91m"
+BRIGHT_GREEN   = "\033[92m"
+BRIGHT_YELLOW  = "\033[93m"
+BRIGHT_BLUE    = "\033[94m"
+BRIGHT_MAGENTA = "\033[95m"
+BRIGHT_CYAN    = "\033[96m"
+BRIGHT_WHITE   = "\033[97m"
+
+# ── Box-drawing pieces ───────────────────────────────────────────────────────
+TL = "╭"; TR = "╮"; BL = "╰"; BR = "╯"
+H  = "─"; V  = "│"
+TL2 = "┌"; TR2 = "┐"; BL2 = "└"; BR2 = "┘"
+H2  = "─"; V2  = "│"
+T_DOWN = "┬"; T_UP = "┴"; T_RIGHT = "├"; T_LEFT = "┤"; CROSS = "┼"
+
+# ── ASCII art ────────────────────────────────────────────────────────────────
+ROBOT_SMALL = f"""{BRIGHT_GREEN}  ┌─┤ ├─┐{RESET}  {BOLD}{BRIGHT_WHITE}t o d o b o t{RESET}
+{BRIGHT_GREEN}  │ ◉ ◉ │{RESET}  {DIM}your friendly task buddy{RESET}
+{BRIGHT_GREEN}  └┬─┬─┬┘{RESET}
+"""
+
+# ── Data layer ───────────────────────────────────────────────────────────────
+def _load_tasks():
+    if not DATA_FILE.exists():
+        return []
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
+
+def _save_tasks(tasks):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(DATA_FILE, "w") as f:
+        json.dump(tasks, f, indent=2)
+
+def _next_id(tasks):
+    if not tasks:
+        return 1
+    return max(t["id"] for t in tasks) + 1
+
+# ── Config layer ─────────────────────────────────────────────────────────────
+def _load_config():
+    if not CONFIG_FILE.exists():
+        return {}
+    with open(CONFIG_FILE, "r") as f:
+        return json.load(f)
+
+def _save_config(config):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
+# ── Spinner ──────────────────────────────────────────────────────────────────
+def _with_spinner(message, fn):
+    """Run fn() in a thread while showing a spinner. Returns fn's result."""
+    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    result = [None]
+    error = [None]
+    done = threading.Event()
+
+    def _worker():
+        try:
+            result[0] = fn()
+        except Exception as e:
+            error[0] = e
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+    i = 0
+    while not done.is_set():
+        frame = frames[i % len(frames)]
+        sys.stdout.write(f"\r  {BRIGHT_CYAN}{frame}{RESET} {message}")
+        sys.stdout.flush()
+        done.wait(timeout=0.08)
+        i += 1
+
+    sys.stdout.write(f"\r  {' ' * (len(message) + 4)}\r")
+    sys.stdout.flush()
+
+    if error[0]:
+        raise error[0]
+    return result[0]
+
+# ── Gist sync ────────────────────────────────────────────────────────────────
+def _gh_available():
+    if not shutil.which("gh"):
+        return False, "gh CLI not found. Install it from https://cli.github.com"
+    try:
+        r = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return False, "gh is not authenticated. Run: gh auth login"
+    except subprocess.TimeoutExpired:
+        return False, "gh auth check timed out"
+    return True, None
+
+def _sync_push():
+    """Push local tasks.json to the configured gist."""
+    config = _load_config()
+    gist_id = config.get("gist_id")
+    if not gist_id:
+        return False, "No gist configured. Run: todo sync"
+
+    ok, err = _gh_available()
+    if not ok:
+        return False, err
+
+    if not DATA_FILE.exists():
+        _save_tasks([])
+
+    def _do_push():
+        return subprocess.run(
+            ["gh", "gist", "edit", gist_id, "-f", "tasks.json", str(DATA_FILE)],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    try:
+        r = _with_spinner("Pushing to gist...", _do_push)
+    except subprocess.TimeoutExpired:
+        return False, "Push timed out"
+
+    if r.returncode != 0:
+        return False, f"Push failed: {r.stderr.strip()}"
+    return True, None
+
+def _sync_pull():
+    """Pull tasks.json from the configured gist."""
+    config = _load_config()
+    gist_id = config.get("gist_id")
+    if not gist_id:
+        return False, "No gist configured. Run: todo sync"
+
+    ok, err = _gh_available()
+    if not ok:
+        return False, err
+
+    def _do_pull():
+        return subprocess.run(
+            ["gh", "gist", "view", gist_id, "-f", "tasks.json", "--raw"],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    try:
+        r = _with_spinner("Pulling from gist...", _do_pull)
+    except subprocess.TimeoutExpired:
+        return False, "Pull timed out"
+
+    if r.returncode != 0:
+        return False, f"Pull failed: {r.stderr.strip()}"
+
+    try:
+        tasks = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return False, "Remote data is not valid JSON"
+
+    _save_tasks(tasks)
+    return True, None
+
+def _setup_gist():
+    """Interactive setup: create a new gist or enter an existing gist ID."""
+    ok, err = _gh_available()
+    if not ok:
+        print(f"\n  {BRIGHT_RED}✘{RESET}  {err}\n")
+        return False
+
+    print(f"\n  {BOLD}{BRIGHT_WHITE}Gist sync setup{RESET}\n")
+    print(f"    {BRIGHT_CYAN}[{BRIGHT_WHITE}c{BRIGHT_CYAN}]{RESET}  Create a new private gist")
+    print(f"    {BRIGHT_CYAN}[{BRIGHT_WHITE}e{BRIGHT_CYAN}]{RESET}  Enter an existing gist ID")
+    print()
+    choice = _input_prompt("Choose: ")
+    if not choice:
+        return False
+
+    choice = choice.strip().lower()
+
+    if choice == "c":
+        if not DATA_FILE.exists():
+            _save_tasks([])
+
+        def _do_create():
+            return subprocess.run(
+                ["gh", "gist", "create", "--private", "-f", "tasks.json", str(DATA_FILE)],
+                capture_output=True, text=True, timeout=30,
+            )
+
+        try:
+            r = _with_spinner("Creating private gist...", _do_create)
+        except subprocess.TimeoutExpired:
+            print(f"\n  {BRIGHT_RED}✘{RESET}  Timed out creating gist.\n")
+            return False
+
+        if r.returncode != 0:
+            print(f"\n  {BRIGHT_RED}✘{RESET}  Failed: {r.stderr.strip()}\n")
+            return False
+
+        gist_url = r.stdout.strip()
+        gist_id = gist_url.rstrip("/").split("/")[-1]
+        config = _load_config()
+        config["gist_id"] = gist_id
+        _save_config(config)
+        print(f"  {BRIGHT_GREEN}✔{RESET}  Gist created: {DIM}{gist_id}{RESET}\n")
+        return True
+
+    elif choice == "e":
+        gist_id = _input_prompt("Gist ID (or URL): ")
+        if not gist_id or not gist_id.strip():
+            print(f"\n  {DIM}Cancelled.{RESET}\n")
+            return False
+        gist_id = gist_id.strip().rstrip("/").split("/")[-1]
+        config = _load_config()
+        config["gist_id"] = gist_id
+        _save_config(config)
+        print(f"  {BRIGHT_GREEN}✔{RESET}  Gist configured: {DIM}{gist_id}{RESET}\n")
+        return True
+
+    else:
+        print(f"\n  {DIM}Cancelled.{RESET}\n")
+        return False
+
+def cmd_sync(sub=None):
+    """Handle todo sync [pull|status]."""
+    config = _load_config()
+    gist_id = config.get("gist_id")
+
+    if sub == "status":
+        if gist_id:
+            print(f"\n  {BRIGHT_GREEN}✔{RESET}  Gist configured: {DIM}{gist_id}{RESET}\n")
+        else:
+            print(f"\n  {DIM}No gist configured. Run: {BRIGHT_CYAN}todo sync{RESET}\n")
+        return
+
+    if sub == "pull":
+        if not gist_id:
+            print(f"\n  {BRIGHT_RED}✘{RESET}  No gist configured. Run: {BRIGHT_CYAN}todo sync{RESET}\n")
+            return
+        ok, err = _sync_pull()
+        if ok:
+            print(f"  {BRIGHT_GREEN}✔{RESET}  Pulled from gist\n")
+        else:
+            print(f"  {BRIGHT_RED}✘{RESET}  {err}\n")
+        return
+
+    # Default: push (or setup if no gist)
+    if not gist_id:
+        if not _setup_gist():
+            return
+        config = _load_config()
+        gist_id = config.get("gist_id")
+        if not gist_id:
+            return
+
+    ok, err = _sync_push()
+    if ok:
+        print(f"  {BRIGHT_GREEN}✔{RESET}  Pushed to gist\n")
+    else:
+        print(f"  {BRIGHT_RED}✘{RESET}  {err}\n")
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+def _term_width():
+    try:
+        return os.get_terminal_size().columns
+    except OSError:
+        return 80
+
+def _relative_date(iso_str):
+    created = datetime.fromisoformat(iso_str)
+    now = datetime.now()
+    delta = now - created
+    if delta.days == 0:
+        hours = delta.seconds // 3600
+        if hours == 0:
+            mins = delta.seconds // 60
+            return "just now" if mins < 2 else f"{mins}m ago"
+        return f"{hours}h ago" if hours == 1 else f"{hours}h ago"
+    if delta.days == 1:
+        return "yesterday"
+    if delta.days < 7:
+        return f"{delta.days}d ago"
+    if delta.days < 30:
+        weeks = delta.days // 7
+        return f"{weeks}w ago"
+    return created.strftime("%b %d")
+
+def _wrap_text(text, width):
+    """Wrap text to width, returning list of lines."""
+    if len(text) <= width:
+        return [text]
+    return textwrap.wrap(text, width=width)
+
+# ── Robot sidebar lines (plain text + ANSI) ──────────────────────────────────
+ROBOT_SIDE = [
+    (9, f"{BRIGHT_GREEN}  ┌─┤ ├─┐{RESET}"),
+    (9, f"{BRIGHT_GREEN}  │ ◉ ◉ │{RESET}"),
+    (9, f"{BRIGHT_GREEN}  └┬─┬─┬┘{RESET}"),
+    (9, f"  {DIM}todobot{RESET}"),
+]
+ROBOT_SIDE_W = 9
+ROBOT_SIDE_BLANK = " " * ROBOT_SIDE_W
+
+# ── Table rendering ──────────────────────────────────────────────────────────
+def _print_table(tasks, show_done=True):
+    if not tasks:
+        print(f"\n  {BRIGHT_GREEN}  ┌─┤ ├─┐{RESET}")
+        print(f"  {BRIGHT_GREEN}  │ ◉ ◉ │{RESET}  {DIM}No tasks yet! Add one with:{RESET} {BRIGHT_CYAN}todo add \"your task\"{RESET}")
+        print(f"  {BRIGHT_GREEN}  └┬─┬─┬┘{RESET}\n")
+        return
+
+    filtered = tasks if show_done else [t for t in tasks if not t["done"]]
+    if not filtered:
+        print(f"\n  {BRIGHT_GREEN}✨ All done! Nothing to do.{RESET}\n")
+        return
+
+    # Pending first, completed at the bottom
+    filtered.sort(key=lambda t: (t["done"], t["id"]))
+
+    tw = min(_term_width(), 100)
+    robot_pad = ROBOT_SIDE_W + 2  # robot width + gap
+    id_w = 4
+    status_w = 4
+    date_w = 11
+    # task text gets the rest, minus robot, borders, padding
+    task_w = tw - robot_pad - id_w - status_w - date_w - 13
+    task_w = max(task_w, 20)
+
+    # Build all output lines first, then pair with robot
+    table_lines = []
+
+    # Header
+    table_lines.append(
+        f"{BRIGHT_CYAN}{TL}{H * (id_w + 2)}{T_DOWN}"
+        f"{H * (status_w + 2)}{T_DOWN}"
+        f"{H * (task_w + 2)}{T_DOWN}"
+        f"{H * (date_w + 2)}{TR}{RESET}"
+    )
+    table_lines.append(
+        f"{BRIGHT_CYAN}{V}{RESET} {BOLD}{BRIGHT_WHITE}{'ID':^{id_w}}{RESET} "
+        f"{BRIGHT_CYAN}{V}{RESET} {BOLD}{BRIGHT_WHITE}{'':^{status_w}}{RESET} "
+        f"{BRIGHT_CYAN}{V}{RESET} {BOLD}{BRIGHT_WHITE}{'TASK':<{task_w}}{RESET} "
+        f"{BRIGHT_CYAN}{V}{RESET} {BOLD}{BRIGHT_WHITE}{'ADDED':^{date_w}}{RESET} "
+        f"{BRIGHT_CYAN}{V}{RESET}"
+    )
+    table_lines.append(
+        f"{BRIGHT_CYAN}{T_RIGHT}{H * (id_w + 2)}{CROSS}"
+        f"{H * (status_w + 2)}{CROSS}"
+        f"{H * (task_w + 2)}{CROSS}"
+        f"{H * (date_w + 2)}{T_LEFT}{RESET}"
+    )
+
+    for idx, t in enumerate(filtered):
+        tid = str(t["id"])
+        done = t["done"]
+        task_text = t["text"]
+        date_str = _relative_date(t["created"])
+
+        if idx > 0:
+            table_lines.append(
+                f"{BRIGHT_CYAN}{T_RIGHT}{BRIGHT_BLACK}{H * (id_w + 2)}{BRIGHT_CYAN}{CROSS}"
+                f"{BRIGHT_BLACK}{H * (status_w + 2)}{BRIGHT_CYAN}{CROSS}"
+                f"{BRIGHT_BLACK}{H * (task_w + 2)}{BRIGHT_CYAN}{CROSS}"
+                f"{BRIGHT_BLACK}{H * (date_w + 2)}{BRIGHT_CYAN}{T_LEFT}{RESET}"
+            )
+
+        if done:
+            status_icon = f"{BRIGHT_GREEN}✔{RESET}"
+            text_style = f"{DIM}{STRIKE}"
+            id_style = f"{DIM}"
+            date_style = f"{DIM}"
+        else:
+            status_icon = f"{BRIGHT_YELLOW}○{RESET}"
+            text_style = f"{BRIGHT_WHITE}"
+            id_style = f"{BRIGHT_MAGENTA}"
+            date_style = f"{BRIGHT_BLACK}"
+
+        lines = _wrap_text(task_text, task_w)
+        table_lines.append(
+            f"{BRIGHT_CYAN}{V}{RESET} {id_style}{tid:>{id_w}}{RESET} "
+            f"{BRIGHT_CYAN}{V}{RESET}  {status_icon}   "
+            f"{BRIGHT_CYAN}{V}{RESET} {text_style}{lines[0]:<{task_w}}{RESET} "
+            f"{BRIGHT_CYAN}{V}{RESET} {date_style}{date_str:^{date_w}}{RESET} "
+            f"{BRIGHT_CYAN}{V}{RESET}"
+        )
+        for extra_line in lines[1:]:
+            table_lines.append(
+                f"{BRIGHT_CYAN}{V}{RESET} {'':>{id_w}} "
+                f"{BRIGHT_CYAN}{V}{RESET} {'':^{status_w}} "
+                f"{BRIGHT_CYAN}{V}{RESET} {text_style}{extra_line:<{task_w}}{RESET} "
+                f"{BRIGHT_CYAN}{V}{RESET} {'':^{date_w}} "
+                f"{BRIGHT_CYAN}{V}{RESET}"
+            )
+
+    table_lines.append(
+        f"{BRIGHT_CYAN}{BL}{H * (id_w + 2)}{T_UP}"
+        f"{H * (status_w + 2)}{T_UP}"
+        f"{H * (task_w + 2)}{T_UP}"
+        f"{H * (date_w + 2)}{BR}{RESET}"
+    )
+
+    # Progress bar
+    total = len(tasks)
+    done_count = sum(1 for t in tasks if t["done"])
+    pending = total - done_count
+    bar_w = 20
+    filled = int((done_count / total) * bar_w) if total else 0
+    bar = f"{BRIGHT_GREEN}{'█' * filled}{RESET}{DIM}{'░' * (bar_w - filled)}{RESET}"
+    table_lines.append(f"{DIM}  {bar}  {done_count}/{total} done  •  {pending} pending{RESET}")
+
+    # Vertically centre the robot next to the table
+    n_table = len(table_lines)
+    n_robot = len(ROBOT_SIDE)
+    robot_start = max(0, (n_table - n_robot) // 2)
+
+    print()
+    for i, tline in enumerate(table_lines):
+        ri = i - robot_start
+        if 0 <= ri < n_robot:
+            rpart = ROBOT_SIDE[ri][1]
+        else:
+            rpart = ROBOT_SIDE_BLANK
+        print(f"  {rpart} {tline}")
+    print()
+
+# ── Commands ─────────────────────────────────────────────────────────────────
+def cmd_add(text):
+    tasks = _load_tasks()
+    new_id = _next_id(tasks)
+    task = {
+        "id": new_id,
+        "text": text,
+        "done": False,
+        "created": datetime.now().isoformat(),
+    }
+    tasks.append(task)
+    _save_tasks(tasks)
+    print(f"\n  {BRIGHT_GREEN}✔{RESET} Added task {BRIGHT_MAGENTA}#{new_id}{RESET}: {BRIGHT_WHITE}{text}{RESET}\n")
+
+def cmd_list():
+    tasks = _load_tasks()
+    _print_table(tasks)
+
+def cmd_done(task_id):
+    tasks = _load_tasks()
+    for t in tasks:
+        if t["id"] == task_id:
+            if t["done"]:
+                print(f"\n  {BRIGHT_YELLOW}⚠{RESET}  Task {BRIGHT_MAGENTA}#{task_id}{RESET} is already done.\n")
+                return
+            t["done"] = True
+            _save_tasks(tasks)
+            print(f"\n  {BRIGHT_GREEN}✔{RESET}  Nice! Completed {BRIGHT_MAGENTA}#{task_id}{RESET}: {DIM}{STRIKE}{t['text']}{RESET}\n")
+            return
+    print(f"\n  {BRIGHT_RED}✘{RESET}  Task {BRIGHT_MAGENTA}#{task_id}{RESET} not found.\n")
+
+def cmd_remove(task_id):
+    tasks = _load_tasks()
+    for i, t in enumerate(tasks):
+        if t["id"] == task_id:
+            removed = tasks.pop(i)
+            _save_tasks(tasks)
+            print(f"\n  {BRIGHT_RED}🗑{RESET}  Removed {BRIGHT_MAGENTA}#{task_id}{RESET}: {DIM}{removed['text']}{RESET}\n")
+            return
+    print(f"\n  {BRIGHT_RED}✘{RESET}  Task {BRIGHT_MAGENTA}#{task_id}{RESET} not found.\n")
+
+def cmd_help():
+    print()
+    print(f"  {BOLD}{BRIGHT_WHITE}USAGE{RESET}")
+    print(f"    {BRIGHT_CYAN}todo{RESET}                     interactive mode")
+    print(f"    {BRIGHT_CYAN}todo add{RESET} {DIM}\"task text\"{RESET}       add a new task")
+    print(f"    {BRIGHT_CYAN}todo ls{RESET}                    list all tasks")
+    print(f"    {BRIGHT_CYAN}todo done{RESET} {DIM}<id>{RESET}             mark a task as done")
+    print(f"    {BRIGHT_CYAN}todo rm{RESET} {DIM}<id>{RESET}               remove a task")
+    print(f"    {BRIGHT_CYAN}todo sync{RESET}                  push tasks to gist")
+    print(f"    {BRIGHT_CYAN}todo sync pull{RESET}             pull tasks from gist")
+    print(f"    {BRIGHT_CYAN}todo sync status{RESET}           show sync config")
+    print(f"    {BRIGHT_CYAN}todo help{RESET}                  show this help")
+    print()
+
+# ── Interactive wizard ───────────────────────────────────────────────────────
+def _clear():
+    os.system("clear" if os.name != "nt" else "cls")
+
+def _input_prompt(prompt_text):
+    try:
+        return input(f"  {BRIGHT_CYAN}▸{RESET} {prompt_text}")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+
+def _select_action():
+    print(f"  {BOLD}{BRIGHT_WHITE}What would you like to do?{RESET}\n")
+    actions = [
+        ("a", "Add a new task",    BRIGHT_GREEN),
+        ("d", "Mark task as done",  BRIGHT_YELLOW),
+        ("r", "Remove a task",      BRIGHT_RED),
+        ("s", "Sync",               BRIGHT_MAGENTA),
+        ("l", "List tasks",         BRIGHT_CYAN),
+        ("q", "Quit",               DIM),
+    ]
+    for key, label, color in actions:
+        print(f"    {BRIGHT_CYAN}[{BRIGHT_WHITE}{key}{BRIGHT_CYAN}]{RESET}  {color}{label}{RESET}")
+    print(f"\n  {DIM}Tip: type {RESET}d 3{DIM} or {RESET}r 5{DIM} to skip the ID prompt{RESET}")
+    print()
+    choice = _input_prompt("Choose: ")
+    if not choice:
+        return None, None
+    parts = choice.strip().lower().split(None, 1)
+    action = parts[0]
+    arg = parts[1] if len(parts) > 1 else None
+    return action, arg
+
+def _select_task(tasks, prompt="Select task ID: ", filter_done=None):
+    filtered = tasks
+    if filter_done is not None:
+        filtered = [t for t in tasks if t["done"] == filter_done]
+
+    if not filtered:
+        if filter_done is False:
+            print(f"\n  {BRIGHT_GREEN}✨ No pending tasks!{RESET}\n")
+        elif filter_done is True:
+            print(f"\n  {DIM}No completed tasks.{RESET}\n")
+        else:
+            print(f"\n  {DIM}No tasks.{RESET}\n")
+        return None
+
+    _print_table(filtered)
+    val = _input_prompt(prompt)
+    if val is None:
+        return None
+    try:
+        return int(val.strip())
+    except ValueError:
+        print(f"\n  {BRIGHT_RED}✘{RESET}  Please enter a valid task ID.\n")
+        return None
+
+def _redraw(message=None):
+    """Clear screen, show current tasks, and optional message."""
+    _clear()
+    tasks = _load_tasks()
+    if tasks:
+        _print_table(tasks)
+    else:
+        print(f"  {DIM}No tasks yet. Let's add one!{RESET}\n")
+    if message:
+        print(message)
+
+def interactive():
+    config = _load_config()
+    gist_id = config.get("gist_id")
+
+    # Auto-pull on open
+    if gist_id:
+        ok, err = _gh_available()
+        if ok:
+            pull_ok, pull_err = _sync_pull()
+            if not pull_ok:
+                _redraw(f"  {BRIGHT_YELLOW}⚠{RESET}  Sync pull failed: {DIM}{pull_err}{RESET}\n")
+            else:
+                _redraw(f"  {BRIGHT_GREEN}✔{RESET}  Synced from gist\n")
+        else:
+            _redraw(f"  {BRIGHT_YELLOW}⚠{RESET}  {DIM}{err}{RESET}\n")
+    else:
+        _redraw()
+
+    while True:
+        action, arg = _select_action()
+        if action is None or action == "q":
+            # Auto-push on quit
+            config = _load_config()
+            if config.get("gist_id"):
+                ok, err = _gh_available()
+                if ok:
+                    push_ok, push_err = _sync_push()
+                    # Show result briefly before goodbye
+                    if not push_ok:
+                        print(f"\n  {BRIGHT_YELLOW}⚠{RESET}  Sync push failed: {DIM}{push_err}{RESET}")
+            _clear()
+            print(f"\n  {BRIGHT_GREEN}  ┌─┤ ├─┐{RESET}")
+            print(f"  {BRIGHT_GREEN}  │ ◕ ◕ │{RESET}  {DIM}See you later!{RESET}")
+            print(f"  {BRIGHT_GREEN}  └┬─┬─┬┘{RESET}\n")
+            break
+        elif action == "a":
+            if arg is not None:
+                text = arg
+            else:
+                text = _input_prompt("What do you need to do? ")
+            if text and text.strip():
+                tasks = _load_tasks()
+                new_id = _next_id(tasks)
+                task = {
+                    "id": new_id,
+                    "text": text.strip(),
+                    "done": False,
+                    "created": datetime.now().isoformat(),
+                }
+                tasks.append(task)
+                _save_tasks(tasks)
+                _redraw(f"  {BRIGHT_GREEN}✔{RESET} Added task {BRIGHT_MAGENTA}#{new_id}{RESET}: {BRIGHT_WHITE}{text.strip()}{RESET}\n")
+            else:
+                _redraw()
+        elif action == "d":
+            tasks = _load_tasks()
+            pending = [t for t in tasks if not t["done"]]
+            if not pending:
+                _redraw(f"  {BRIGHT_GREEN}✨ No pending tasks!{RESET}\n")
+                continue
+            if arg is not None:
+                tid_str = arg
+            else:
+                _redraw()
+                tid_str = _input_prompt("Which task did you finish? ID: ")
+            if tid_str is None:
+                _redraw()
+                continue
+            try:
+                tid = int(tid_str.strip())
+            except ValueError:
+                _redraw(f"  {BRIGHT_RED}✘{RESET}  Please enter a valid task ID.\n")
+                continue
+            tasks = _load_tasks()
+            found = False
+            for t in tasks:
+                if t["id"] == tid:
+                    found = True
+                    if t["done"]:
+                        _redraw(f"  {BRIGHT_YELLOW}⚠{RESET}  Task {BRIGHT_MAGENTA}#{tid}{RESET} is already done.\n")
+                    else:
+                        t["done"] = True
+                        _save_tasks(tasks)
+                        _redraw(f"  {BRIGHT_GREEN}✔{RESET}  Nice! Completed {BRIGHT_MAGENTA}#{tid}{RESET}: {DIM}{STRIKE}{t['text']}{RESET}\n")
+                    break
+            if not found:
+                _redraw(f"  {BRIGHT_RED}✘{RESET}  Task {BRIGHT_MAGENTA}#{tid}{RESET} not found.\n")
+        elif action == "r":
+            tasks = _load_tasks()
+            if not tasks:
+                _redraw(f"  {DIM}No tasks to remove.{RESET}\n")
+                continue
+            if arg is not None:
+                tid_str = arg
+            else:
+                _redraw()
+                tid_str = _input_prompt("Which task to remove? ID: ")
+            if tid_str is None:
+                _redraw()
+                continue
+            try:
+                tid = int(tid_str.strip())
+            except ValueError:
+                _redraw(f"  {BRIGHT_RED}✘{RESET}  Please enter a valid task ID.\n")
+                continue
+            tasks = _load_tasks()
+            found = False
+            for i, t in enumerate(tasks):
+                if t["id"] == tid:
+                    found = True
+                    removed = tasks.pop(i)
+                    _save_tasks(tasks)
+                    _redraw(f"  {BRIGHT_RED}🗑{RESET}  Removed {BRIGHT_MAGENTA}#{tid}{RESET}: {DIM}{removed['text']}{RESET}\n")
+                    break
+            if not found:
+                _redraw(f"  {BRIGHT_RED}✘{RESET}  Task {BRIGHT_MAGENTA}#{tid}{RESET} not found.\n")
+        elif action == "s":
+            config = _load_config()
+            if not config.get("gist_id"):
+                _setup_gist()
+                _redraw()
+            else:
+                push_ok, push_err = _sync_push()
+                if push_ok:
+                    _redraw(f"  {BRIGHT_GREEN}✔{RESET}  Synced to gist\n")
+                else:
+                    _redraw(f"  {BRIGHT_RED}✘{RESET}  {push_err}\n")
+        elif action == "l":
+            _redraw()
+        else:
+            _redraw(f"  {DIM}Unknown option. Try again.{RESET}\n")
+
+# ── Entry point ──────────────────────────────────────────────────────────────
+def main():
+    args = sys.argv[1:]
+
+    if not args:
+        interactive()
+        return
+
+    cmd = args[0].lower()
+
+    if cmd == "add":
+        if len(args) < 2:
+            print(f"\n  {BRIGHT_RED}✘{RESET}  Usage: {BRIGHT_CYAN}todo add \"task text\"{RESET}\n")
+            sys.exit(1)
+        text = " ".join(args[1:])
+        cmd_add(text)
+    elif cmd in ("ls", "list"):
+        cmd_list()
+    elif cmd == "done":
+        if len(args) < 2:
+            print(f"\n  {BRIGHT_RED}✘{RESET}  Usage: {BRIGHT_CYAN}todo done <id>{RESET}\n")
+            sys.exit(1)
+        try:
+            tid = int(args[1])
+        except ValueError:
+            print(f"\n  {BRIGHT_RED}✘{RESET}  ID must be a number.\n")
+            sys.exit(1)
+        cmd_done(tid)
+    elif cmd in ("rm", "remove", "del", "delete"):
+        if len(args) < 2:
+            print(f"\n  {BRIGHT_RED}✘{RESET}  Usage: {BRIGHT_CYAN}todo rm <id>{RESET}\n")
+            sys.exit(1)
+        try:
+            tid = int(args[1])
+        except ValueError:
+            print(f"\n  {BRIGHT_RED}✘{RESET}  ID must be a number.\n")
+            sys.exit(1)
+        cmd_remove(tid)
+    elif cmd == "sync":
+        sub = args[1].lower() if len(args) > 1 else None
+        if sub and sub not in ("pull", "status"):
+            print(f"\n  {BRIGHT_RED}✘{RESET}  Usage: {BRIGHT_CYAN}todo sync [pull|status]{RESET}\n")
+            sys.exit(1)
+        cmd_sync(sub)
+    elif cmd in ("help", "-h", "--help"):
+        cmd_help()
+    else:
+        print(f"\n  {BRIGHT_RED}✘{RESET}  Unknown command: {BRIGHT_WHITE}{cmd}{RESET}")
+        cmd_help()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
