@@ -357,6 +357,7 @@
         print(`    ${s("c-cyan", "[")}${s("c-bright-white", "d")}${s("c-cyan", "]")}  ${s("c-bright-yellow", "Mark task as done")}`);
         print(`    ${s("c-cyan", "[")}${s("c-bright-white", "r")}${s("c-cyan", "]")}  ${s("c-bright-red", "Remove a task")}`);
         print(`    ${s("c-cyan", "[")}${s("c-bright-white", "s")}${s("c-cyan", "]")}  ${s("c-bright-magenta", "Sync")}`);
+        print(`    ${s("c-cyan", "[")}${s("c-bright-white", "l")}${s("c-cyan", "]")}  ${s("c-cyan", "Refresh list")}`);
         print("");
         print(`  ${s("c-dim", "Tip: type")} d 3 ${s("c-dim", "or")} r 5 ${s("c-dim", "for quick actions")}`);
         print("");
@@ -548,9 +549,18 @@
 
             case "l":
             case "ls":
-            case "list":
-                redraw();
+            case "list": {
+                if (config.token && config.gist_id) {
+                    const sp = showSpinner("Syncing from gist...");
+                    const result = await gistPull();
+                    hideSpinner(sp);
+                    if (result.ok) { redraw(`  ${s("c-bright-green", "✔")}  Synced from gist\n`); }
+                    else { redraw(`  ${s("c-bright-yellow", "⚠")}  Pull failed: ${s("c-dim", result.err)}\n`); }
+                } else {
+                    redraw();
+                }
                 break;
+            }
 
             case "clear":
             case "cls":
