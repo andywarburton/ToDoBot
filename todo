@@ -538,6 +538,8 @@ def _input_prompt(prompt_text):
         return None
 
 def _select_action():
+    print()
+    print()
     print(f"  {BOLD}{BRIGHT_WHITE}What would you like to do?{RESET}\n")
     actions = [
         ("a", "Add a new task",    BRIGHT_GREEN),

@@ -8,6 +8,8 @@
 
 > **Disclaimer:** This is vibe coded slop but it actually works quite well.
 
+![ToDoBot terminal UI](docs/screenshot.png)
+
 A simple, colourful todo list that runs entirely in the terminal. Written in Python 3 with zero dependencies — just the standard library.
 
 Also available as a **web app** at [andywarburton.github.io/ToDoBot](https://andywarburton.github.io/ToDoBot/) — same terminal look and feel, syncs with the same gist.
