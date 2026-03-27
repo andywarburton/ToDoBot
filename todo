@@ -539,6 +539,11 @@ def cmd_add(text):
     print(f"\n  {BRIGHT_GREEN}✔{RESET} Added task {BRIGHT_MAGENTA}#{new_id}{RESET}: {BRIGHT_WHITE}{text}{RESET}\n")
 
 def cmd_list():
+    config = _load_config()
+    if config.get("gist_id"):
+        ok, _ = _gh_available()
+        if ok:
+            pull_ok, _ = _sync_pull()
     tasks = _load_tasks()
     _print_table(tasks)
 
@@ -791,7 +796,19 @@ def interactive():
                 else:
                     _redraw(f"  {BRIGHT_RED}✘{RESET}  {push_err}\n")
         elif action == "l":
-            _redraw()
+            config = _load_config()
+            if config.get("gist_id"):
+                ok, _ = _gh_available()
+                if ok:
+                    pull_ok, pull_err = _sync_pull()
+                    if pull_ok:
+                        _redraw(f"  {BRIGHT_GREEN}✔{RESET}  Synced from gist\n")
+                    else:
+                        _redraw(f"  {BRIGHT_YELLOW}⚠{RESET}  Pull failed: {DIM}{pull_err}{RESET}\n")
+                else:
+                    _redraw()
+            else:
+                _redraw()
         else:
             _redraw(f"  {DIM}Unknown option. Try again.{RESET}\n")
 
