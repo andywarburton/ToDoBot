@@ -14,6 +14,7 @@
     let tasks = [];    // visible tasks (filtered)
     let config = {}; // { gist_id, token }
     let inputCallback = null;
+    let activeFilter = null; // current tag filter
 
     // ── Storage ──────────────────────────────────────────────────────────────
     function loadConfig() {
@@ -70,6 +71,16 @@
         return `<span class="${cls}">${html}</span>`;
     }
 
+    function highlightTags(text, wrapCls) {
+        const safe = String(text)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+        return safe.replace(/#\w+/g, match =>
+            `</span><span class="c-tag">${match}</span><span class="${wrapCls}">`
+        );
+    }
+
     // ── Date formatting ──────────────────────────────────────────────────────
     function relativeDate(isoStr) {
         const created = new Date(isoStr);
@@ -91,7 +102,7 @@
     // ── Table rendering ──────────────────────────────────────────────────────
     function getTermWidth() {
         const charWidth = 8.4;
-        return Math.min(Math.floor(output.clientWidth / charWidth), 100);
+        return Math.min(Math.floor(output.clientWidth / charWidth), 120);
     }
 
     function pad(str, width, align = "left") {
@@ -124,34 +135,33 @@
         return lines;
     }
 
-    const ROBOT_LINES = [
-        { w: 9, html: s("c-robot", "  ┌─┤ ├─┐") },
-        { w: 9, html: s("c-robot", "  │ ◉ ◉ │") },
-        { w: 9, html: s("c-robot", "  └┬─┬─┬┘") },
-        { w: 9, html: `  ${s("c-dim", "todobot")}` },
-    ];
-    const ROBOT_W = 9;
-    const ROBOT_BLANK = "\u00A0".repeat(ROBOT_W);
+    function renderTable(statusMsg) {
+        const filtered = activeFilter
+            ? tasks.filter(t => t.text.toLowerCase().includes(`#${activeFilter}`.toLowerCase()))
+            : tasks;
 
-    function renderTable() {
         if (tasks.length === 0) {
             print("");
-            print(`  ${s("c-robot", "  ┌─┤ ├─┐")}`);
-            print(`  ${s("c-robot", "  │ ◉ ◉ │")}  ${s("c-dim", "No tasks yet! Type")} ${s("c-cyan", "a")} ${s("c-dim", "to add one")}`);
-            print(`  ${s("c-robot", "  └┬─┬─┬┘")}`);
+            print(`  ${s("c-robot", "  ┌─┤▪├─┐")}`);
+            print(`  ${s("c-robot", "  │ ◕ ◕ │")}  ${s("c-dim", "No tasks yet! Type")} ${s("c-cyan", "a")} ${s("c-dim", "to add one")}`);
+            print(`  ${s("c-robot", "  └─┤_├─┘")}`);
             print("");
             return;
         }
 
-        const sorted = [...tasks].sort((a, b) => {
+        if (filtered.length === 0 && activeFilter) {
+            print(`\n  ${s("c-dim", "No tasks matching")} #${activeFilter}${s("c-dim", ".")}\n`);
+            return;
+        }
+
+        const sorted = [...filtered].sort((a, b) => {
             if (a.done !== b.done) return a.done ? 1 : -1;
             return a.id - b.id;
         });
 
         const tw = getTermWidth();
-        const robotPad = ROBOT_W + 2;
         const idW = 4, statusW = 4, dateW = 11;
-        const taskW = Math.max(tw - robotPad - idW - statusW - dateW - 13, 20);
+        const taskW = Math.max(tw - idW - statusW - dateW - 17, 20);
 
         const H = "─", V = "│";
         const TL = "╭", TR = "╮", BL = "╰", BR = "╯";
@@ -197,19 +207,23 @@
                 dateCls = "c-bright-black";
             }
 
+            const firstPadded = pad(wrapped[0], taskW);
+            const firstHl = highlightTags(firstPadded, textCls);
             lines.push(
                 s("c-border", V) + " " + s(idCls, pad(tid, idW, "right")) + " " +
                 s("c-border", V) + "  " + statusIcon + "   " +
-                s("c-border", V) + " " + s(textCls, pad(wrapped[0], taskW)) + " " +
+                s("c-border", V) + " " + sRaw(textCls, firstHl) + " " +
                 s("c-border", V) + " " + s(dateCls, pad(dateStr, dateW, "center")) + " " +
                 s("c-border", V)
             );
 
             for (let i = 1; i < wrapped.length; i++) {
+                const extraPadded = pad(wrapped[i], taskW);
+                const extraHl = highlightTags(extraPadded, textCls);
                 lines.push(
                     s("c-border", V) + " " + pad("", idW) + " " +
                     s("c-border", V) + " " + pad("", statusW) + " " +
-                    s("c-border", V) + " " + s(textCls, pad(wrapped[i], taskW)) + " " +
+                    s("c-border", V) + " " + sRaw(textCls, extraHl) + " " +
                     s("c-border", V) + " " + pad("", dateW) + " " +
                     s("c-border", V)
                 );
@@ -218,25 +232,24 @@
 
         lines.push(s("c-border", BL + H.repeat(idW+2) + TU + H.repeat(statusW+2) + TU + H.repeat(taskW+2) + TU + H.repeat(dateW+2) + BR));
 
+        // Footer: robot + progress bar + status
         const total = tasks.length;
         const doneCount = tasks.filter(t => t.done).length;
         const pending = total - doneCount;
         const barW = 20;
         const filled = total ? Math.round((doneCount / total) * barW) : 0;
         const bar = s("c-bar-filled", "█".repeat(filled)) + s("c-bar-empty", "░".repeat(barW - filled));
-        lines.push(`${s("c-dim", "  ")}${bar}  ${s("c-dim", `${doneCount}/${total} done  •  ${pending} pending`)}`);
+        const filterInfo = activeFilter ? `  •  ${s("c-bright-cyan", "#" + activeFilter)}` : "";
+        const statusExtra = statusMsg ? `  ${statusMsg}` : "";
 
-        const nTable = lines.length;
-        const nRobot = ROBOT_LINES.length;
-        const robotStart = Math.max(0, Math.floor((nTable - nRobot) / 2));
+        lines.push(`  ${s("c-robot", "┌─┤▪├─┐")}`);
+        lines.push(`  ${s("c-robot", "│ ◕ ◕ │")}  ${bar}  ${doneCount}/${total} done  •  ${pending} pending${filterInfo}${statusExtra}`);
+        lines.push(`  ${s("c-robot", "└─┤_├─┘")}  ${s("c-dim", 'add "task"  •  done &lt;id&gt;  •  rm &lt;id&gt;')}`);
 
         print("");
-        for (let i = 0; i < nTable; i++) {
-            const ri = i - robotStart;
-            const rPart = (ri >= 0 && ri < nRobot) ? ROBOT_LINES[ri].html : ROBOT_BLANK;
-            print(`  ${rPart} ${lines[i]}`);
+        for (const line of lines) {
+            print(`  ${line}`);
         }
-        print("");
     }
 
     // ── Merge ─────────────────────────────────────────────────────────────────
@@ -343,23 +356,27 @@
     function redraw(message) {
         clear();
         loadTasks();
-        renderTable();
-        if (message) print(message);
+        renderTable(message);
         printMenu();
     }
 
     function printMenu() {
-        print("&nbsp;");
-        print("&nbsp;");
-        print(`  ${s("c-bold c-bright-white", "What would you like to do?")}`);
         print("");
-        print(`    ${s("c-cyan", "[")}${s("c-bright-white", "a")}${s("c-cyan", "]")}  ${s("c-bright-green", "Add a new task")}`);
-        print(`    ${s("c-cyan", "[")}${s("c-bright-white", "d")}${s("c-cyan", "]")}  ${s("c-bright-yellow", "Mark task as done")}`);
-        print(`    ${s("c-cyan", "[")}${s("c-bright-white", "r")}${s("c-cyan", "]")}  ${s("c-bright-red", "Remove a task")}`);
-        print(`    ${s("c-cyan", "[")}${s("c-bright-white", "s")}${s("c-cyan", "]")}  ${s("c-bright-magenta", "Sync")}`);
-        print(`    ${s("c-cyan", "[")}${s("c-bright-white", "l")}${s("c-cyan", "]")}  ${s("c-cyan", "List tasks (refresh)")}`);
+        const tip = s("c-dim", "(tip:") + " d 3 " + s("c-dim", "or") + " r 5 " + s("c-dim", "to skip ID prompt)");
+        print(`  ${s("c-bold c-bright-white", "What would you like to do?")}  ${tip}`);
         print("");
-        print(`  ${s("c-dim", "Tip: type")} d 3 ${s("c-dim", "or")} r 5 ${s("c-dim", "for quick actions")}`);
+        const actions = [
+            ["a", "Add",    "c-bright-green"],
+            ["d", "Done",   "c-bright-yellow"],
+            ["r", "Remove", "c-bright-red"],
+            ["f", "Filter", "c-bright-blue"],
+            ["s", "Sync",   "c-bright-magenta"],
+            ["l", "List",   "c-cyan"],
+        ];
+        const line = actions.map(([key, label, cls]) =>
+            `${s("c-cyan", "[")}${s("c-bright-white", key)}${s("c-cyan", "]")} ${s(cls, label)}`
+        ).join("   ");
+        print(`    ${line}`);
         print("");
     }
 
@@ -547,6 +564,18 @@
                 break;
             }
 
+            case "f":
+            case "filter": {
+                if (arg) {
+                    activeFilter = arg.trim().replace(/^#/, "");
+                    redraw(`  ${s("c-bright-cyan", "▸")}  Filtering by ${s("c-bright-cyan", "#" + activeFilter)}\n`);
+                } else {
+                    activeFilter = null;
+                    redraw(`  ${s("c-dim", "Filter cleared")}\n`);
+                }
+                break;
+            }
+
             case "l":
             case "ls":
             case "list": {
@@ -571,19 +600,9 @@
             case "?":
                 clear();
                 print("");
-                print(`  ${s("c-bold c-bright-white", "COMMANDS")}`);
-                print(`    ${s("c-cyan", "a")} ${s("c-dim", "/ add")}             add a new task`);
-                print(`    ${s("c-cyan", "l")} ${s("c-dim", "/ ls")}              list tasks`);
-                print(`    ${s("c-cyan", "d")} ${s("c-dim", "/ done")} ${s("c-dim", "<id>")}       mark a task as done`);
-                print(`    ${s("c-cyan", "r")} ${s("c-dim", "/ rm")} ${s("c-dim", "<id>")}         remove a task`);
-                print(`    ${s("c-cyan", "s")} ${s("c-dim", "/ sync")}            push to gist`);
-                print(`    ${s("c-cyan", "s pull")}              pull from gist`);
-                print(`    ${s("c-cyan", "s status")}            show sync config`);
-                print(`    ${s("c-cyan", "s reset")}             clear sync config`);
-                print(`    ${s("c-cyan", "clear")}               clear screen`);
-                print(`    ${s("c-cyan", "help")}                show this help`);
-                print("");
-                print(`  ${s("c-dim", "Tip: type")} d 3 ${s("c-dim", "or")} r 5 ${s("c-dim", "for quick actions")}`);
+                print(`  ${s("c-bold c-bright-white", "COMMANDS")}  ${s("c-dim", "(type a command below)")}`);
+                print(`    ${s("c-cyan", "a")} ${s("c-dim", '"text"')}   ${s("c-cyan", "l")}   ${s("c-cyan", "d")} ${s("c-dim", "<id>")}   ${s("c-cyan", "r")} ${s("c-dim", "<id>")}   ${s("c-cyan", "f")} ${s("c-dim", "[tag]")}   ${s("c-cyan", "help")}`);
+                print(`    ${s("c-cyan", "s")} ${s("c-dim", "[pull|status|reset]")}              ${s("c-dim", "(no args = sync)")}`);
                 print("");
                 printMenu();
                 break;

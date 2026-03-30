@@ -98,6 +98,9 @@ body {
 /* Robot colour */
 .c-robot      { color: #56d364; }
 
+/* Tag highlight (inverted) */
+.c-tag        { background: #56d4dd; color: #0d1117; border-radius: 2px; padding: 0 1px; }
+
 /* Table borders */
 .c-border     { color: #56d4dd; }
 .c-border-dim { color: #484f58; }
