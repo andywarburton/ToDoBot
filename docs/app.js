@@ -109,7 +109,7 @@
         str = String(str);
         if (str.length >= width) return str.substring(0, width);
         const diff = width - str.length;
-        const sp = "\u00A0"; // non-breaking space
+        const sp = " ";
         if (align === "right") return sp.repeat(diff) + str;
         if (align === "center") {
             const left = Math.floor(diff / 2);
@@ -172,7 +172,7 @@
         lines.push(s("c-border", TL + H.repeat(idW+2) + TD + H.repeat(statusW+2) + TD + H.repeat(taskW+2) + TD + H.repeat(dateW+2) + TR));
         lines.push(
             s("c-border", V) + " " + s("c-bold c-bright-white", pad("ID", idW, "center")) + " " +
-            s("c-border", V) + " " + s("c-bold c-bright-white", pad("", statusW, "center")) + " " +
+            s("c-border", V) + "  " + s("c-bold c-bright-white", pad("", 1)) + "   " +
             s("c-border", V) + " " + s("c-bold c-bright-white", pad("TASK", taskW)) + " " +
             s("c-border", V) + " " + s("c-bold c-bright-white", pad("ADDED", dateW, "center")) + " " +
             s("c-border", V)
