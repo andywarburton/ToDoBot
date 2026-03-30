@@ -173,7 +173,7 @@
         lines.push(
             s("c-border", V) + " " + s("c-bold c-bright-white", pad("ID", idW, "center")) + " " +
             s("c-border", V) + "  " + s("c-bold c-bright-white", pad("", 1)) + "   " +
-            s("c-border", V) + " " + s("c-bold c-bright-white", pad("TASK", taskW)) + " " +
+            s("c-border", V) + " " + s("c-bold c-bright-white", pad("TASK", taskW - 4)) + " " +
             s("c-border", V) + " " + s("c-bold c-bright-white", pad("ADDED", dateW, "center")) + " " +
             s("c-border", V)
         );
