@@ -27,6 +27,7 @@ DIM     = "\033[2m"
 ITALIC  = "\033[3m"
 ULINE   = "\033[4m"
 STRIKE  = "\033[9m"
+REVERSE = "\033[7m"
 
 BLACK   = "\033[30m"
 RED     = "\033[31m"
@@ -63,9 +64,9 @@ H2  = "─"; V2  = "│"
 T_DOWN = "┬"; T_UP = "┴"; T_RIGHT = "├"; T_LEFT = "┤"; CROSS = "┼"
 
 # ── ASCII art ────────────────────────────────────────────────────────────────
-ROBOT_SMALL = f"""{BRIGHT_GREEN}  ┌─┤ ├─┐{RESET}  {BOLD}{BRIGHT_WHITE}t o d o b o t{RESET}
-{BRIGHT_GREEN}  │ ◉ ◉ │{RESET}  {DIM}your friendly task buddy{RESET}
-{BRIGHT_GREEN}  └┬─┬─┬┘{RESET}
+ROBOT_SMALL = f"""{BRIGHT_GREEN}  ┌─┤▪├─┐{RESET}  {BOLD}{BRIGHT_WHITE}t o d o b o t{RESET}
+{BRIGHT_GREEN}  │ ◕ ◕ │{RESET}  {DIM}your friendly task buddy{RESET}
+{BRIGHT_GREEN}  └─┤_├─┘{RESET}
 """
 
 # ── Data layer ───────────────────────────────────────────────────────────────
@@ -394,39 +395,41 @@ def _wrap_text(text, width):
         return [text]
     return textwrap.wrap(text, width=width)
 
-# ── Robot sidebar lines (plain text + ANSI) ──────────────────────────────────
-ROBOT_SIDE = [
-    (9, f"{BRIGHT_GREEN}  ┌─┤ ├─┐{RESET}"),
-    (9, f"{BRIGHT_GREEN}  │ ◉ ◉ │{RESET}"),
-    (9, f"{BRIGHT_GREEN}  └┬─┬─┬┘{RESET}"),
-    (9, f"  {DIM}todobot{RESET}"),
-]
-ROBOT_SIDE_W = 9
-ROBOT_SIDE_BLANK = " " * ROBOT_SIDE_W
+def _highlight_tags(text, style_before):
+    """Replace #tags in text with reverse-video highlighted versions."""
+    import re
+    def _repl(m):
+        return f"{REVERSE}{BRIGHT_CYAN}{m.group()}{RESET}{style_before}"
+    return re.sub(r"#\w+", _repl, text)
 
 # ── Table rendering ──────────────────────────────────────────────────────────
-def _print_table(tasks, show_done=True):
+def _print_table(tasks, show_done=True, status_msg=None, tag_filter=None):
     if not tasks:
-        print(f"\n  {BRIGHT_GREEN}  ┌─┤ ├─┐{RESET}")
-        print(f"  {BRIGHT_GREEN}  │ ◉ ◉ │{RESET}  {DIM}No tasks yet! Add one with:{RESET} {BRIGHT_CYAN}todo add \"your task\"{RESET}")
-        print(f"  {BRIGHT_GREEN}  └┬─┬─┬┘{RESET}\n")
+        print(f"\n  {BRIGHT_GREEN}  ┌─┤▪├─┐{RESET}")
+        print(f"  {BRIGHT_GREEN}  │ ◕ ◕ │{RESET}  {DIM}No tasks yet! Add one with:{RESET} {BRIGHT_CYAN}todo add \"your task\"{RESET}")
+        print(f"  {BRIGHT_GREEN}  └─┤_├─┘{RESET}\n")
         return
 
     filtered = tasks if show_done else [t for t in tasks if not t["done"]]
+    if tag_filter:
+        tag = f"#{tag_filter.lstrip('#')}".lower()
+        filtered = [t for t in filtered if tag in t["text"].lower()]
     if not filtered:
-        print(f"\n  {BRIGHT_GREEN}✨ All done! Nothing to do.{RESET}\n")
+        if tag_filter:
+            print(f"\n  {DIM}No tasks matching {RESET}#{tag_filter.lstrip('#')}{DIM}.{RESET}\n")
+        else:
+            print(f"\n  {BRIGHT_GREEN}✨ All done! Nothing to do.{RESET}\n")
         return
 
     # Pending first, completed at the bottom
     filtered.sort(key=lambda t: (t["done"], t["id"]))
 
-    tw = min(_term_width(), 100)
-    robot_pad = ROBOT_SIDE_W + 2  # robot width + gap
+    tw = min(_term_width(), 120)
     id_w = 4
     status_w = 4
     date_w = 11
-    # task text gets the rest, minus robot, borders, padding
-    task_w = tw - robot_pad - id_w - status_w - date_w - 13
+    # task text gets the rest, minus borders and padding
+    task_w = tw - id_w - status_w - date_w - 17
     task_w = max(task_w, 20)
 
     # Build all output lines first, then pair with robot
@@ -479,18 +482,22 @@ def _print_table(tasks, show_done=True):
             date_style = f"{BRIGHT_BLACK}"
 
         lines = _wrap_text(task_text, task_w)
+        first = f"{lines[0]:<{task_w}}"
+        first_hl = _highlight_tags(first, text_style)
         table_lines.append(
             f"{BRIGHT_CYAN}{V}{RESET} {id_style}{tid:>{id_w}}{RESET} "
             f"{BRIGHT_CYAN}{V}{RESET}  {status_icon}   "
-            f"{BRIGHT_CYAN}{V}{RESET} {text_style}{lines[0]:<{task_w}}{RESET} "
+            f"{BRIGHT_CYAN}{V}{RESET} {text_style}{first_hl}{RESET} "
             f"{BRIGHT_CYAN}{V}{RESET} {date_style}{date_str:^{date_w}}{RESET} "
             f"{BRIGHT_CYAN}{V}{RESET}"
         )
         for extra_line in lines[1:]:
+            padded = f"{extra_line:<{task_w}}"
+            padded_hl = _highlight_tags(padded, text_style)
             table_lines.append(
                 f"{BRIGHT_CYAN}{V}{RESET} {'':>{id_w}} "
                 f"{BRIGHT_CYAN}{V}{RESET} {'':^{status_w}} "
-                f"{BRIGHT_CYAN}{V}{RESET} {text_style}{extra_line:<{task_w}}{RESET} "
+                f"{BRIGHT_CYAN}{V}{RESET} {text_style}{padded_hl}{RESET} "
                 f"{BRIGHT_CYAN}{V}{RESET} {'':^{date_w}} "
                 f"{BRIGHT_CYAN}{V}{RESET}"
             )
@@ -509,22 +516,15 @@ def _print_table(tasks, show_done=True):
     bar_w = 20
     filled = int((done_count / total) * bar_w) if total else 0
     bar = f"{BRIGHT_GREEN}{'█' * filled}{RESET}{DIM}{'░' * (bar_w - filled)}{RESET}"
-    table_lines.append(f"{DIM}  {bar}  {done_count}/{total} done  •  {pending} pending{RESET}")
-
-    # Vertically centre the robot next to the table
-    n_table = len(table_lines)
-    n_robot = len(ROBOT_SIDE)
-    robot_start = max(0, (n_table - n_robot) // 2)
+    table_lines.append(f"  {BRIGHT_GREEN}┌─┤▪├─┐{RESET}")
+    eyes_extra = f"  {status_msg.strip()}" if status_msg else ""
+    filter_info = f"  •  {BRIGHT_CYAN}#{tag_filter.lstrip('#')}{RESET}" if tag_filter else ""
+    table_lines.append(f"  {BRIGHT_GREEN}│ ◕ ◕ │{RESET}  {bar}  {done_count}/{total} done  •  {pending} pending{filter_info}{eyes_extra}")
+    table_lines.append(f"  {BRIGHT_GREEN}└─┤_├─┘{RESET}  {DIM}add \"task\"  •  done <id>  •  rm <id>{RESET}")
 
     print()
-    for i, tline in enumerate(table_lines):
-        ri = i - robot_start
-        if 0 <= ri < n_robot:
-            rpart = ROBOT_SIDE[ri][1]
-        else:
-            rpart = ROBOT_SIDE_BLANK
-        print(f"  {rpart} {tline}")
-    print()
+    for tline in table_lines:
+        print(f"  {tline}")
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 def cmd_add(text):
@@ -582,16 +582,9 @@ def cmd_remove(task_id):
 
 def cmd_help():
     print()
-    print(f"  {BOLD}{BRIGHT_WHITE}USAGE{RESET}")
-    print(f"    {BRIGHT_CYAN}todo{RESET}                     interactive mode")
-    print(f"    {BRIGHT_CYAN}todo add{RESET} {DIM}\"task text\"{RESET}       add a new task")
-    print(f"    {BRIGHT_CYAN}todo ls{RESET}                    list all tasks")
-    print(f"    {BRIGHT_CYAN}todo done{RESET} {DIM}<id>{RESET}             mark a task as done")
-    print(f"    {BRIGHT_CYAN}todo rm{RESET} {DIM}<id>{RESET}               remove a task")
-    print(f"    {BRIGHT_CYAN}todo sync{RESET}                  push tasks to gist")
-    print(f"    {BRIGHT_CYAN}todo sync pull{RESET}             pull tasks from gist")
-    print(f"    {BRIGHT_CYAN}todo sync status{RESET}           show sync config")
-    print(f"    {BRIGHT_CYAN}todo help{RESET}                  show this help")
+    print(f"  {BOLD}{BRIGHT_WHITE}USAGE{RESET}  {BRIGHT_CYAN}todo{RESET} {DIM}[command]{RESET}")
+    print(f"    {BRIGHT_CYAN}add{RESET} {DIM}\"text\"{RESET}   {BRIGHT_CYAN}ls{RESET}   {BRIGHT_CYAN}done{RESET} {DIM}<id>{RESET}   {BRIGHT_CYAN}rm{RESET} {DIM}<id>{RESET}   {BRIGHT_CYAN}help{RESET}")
+    print(f"    {BRIGHT_CYAN}sync{RESET} {DIM}[pull|status]{RESET}              {DIM}(no args = interactive){RESET}")
     print()
 
 # ── Interactive wizard ───────────────────────────────────────────────────────
@@ -607,19 +600,21 @@ def _input_prompt(prompt_text):
 
 def _select_action():
     print()
-    print()
-    print(f"  {BOLD}{BRIGHT_WHITE}What would you like to do?{RESET}\n")
+    print(f"  {BOLD}{BRIGHT_WHITE}What would you like to do?{RESET}  {DIM}(tip: {RESET}d 3{DIM} or {RESET}r 5{DIM} to skip ID prompt){RESET}\n")
     actions = [
-        ("a", "Add a new task",    BRIGHT_GREEN),
-        ("d", "Mark task as done",  BRIGHT_YELLOW),
-        ("r", "Remove a task",      BRIGHT_RED),
-        ("s", "Sync",               BRIGHT_MAGENTA),
-        ("l", "List tasks (refresh)", BRIGHT_CYAN),
-        ("q", "Quit",               DIM),
+        ("a", "Add",    BRIGHT_GREEN),
+        ("d", "Done",   BRIGHT_YELLOW),
+        ("r", "Remove", BRIGHT_RED),
+        ("f", "Filter", BRIGHT_BLUE),
+        ("s", "Sync",   BRIGHT_MAGENTA),
+        ("l", "List",   BRIGHT_CYAN),
+        ("q", "Quit",   DIM),
     ]
-    for key, label, color in actions:
-        print(f"    {BRIGHT_CYAN}[{BRIGHT_WHITE}{key}{BRIGHT_CYAN}]{RESET}  {color}{label}{RESET}")
-    print(f"\n  {DIM}Tip: type {RESET}d 3{DIM} or {RESET}r 5{DIM} to skip the ID prompt{RESET}")
+    line = "    " + "   ".join(
+        f"{BRIGHT_CYAN}[{BRIGHT_WHITE}{key}{BRIGHT_CYAN}]{RESET} {color}{label}{RESET}"
+        for key, label, color in actions
+    )
+    print(line)
     print()
     choice = _input_prompt("Choose: ")
     if not choice:
@@ -653,20 +648,22 @@ def _select_task(tasks, prompt="Select task ID: ", filter_done=None):
         print(f"\n  {BRIGHT_RED}✘{RESET}  Please enter a valid task ID.\n")
         return None
 
-def _redraw(message=None):
+def _redraw(message=None, tag_filter=None):
     """Clear screen, show current tasks, and optional message."""
     _clear()
     tasks = _load_tasks()
     if tasks:
-        _print_table(tasks)
+        _print_table(tasks, status_msg=message, tag_filter=tag_filter)
     else:
         print(f"  {DIM}No tasks yet. Let's add one!{RESET}\n")
-    if message:
-        print(message)
+        if message:
+            print(message)
 
 def interactive():
     config = _load_config()
     gist_id = config.get("gist_id")
+
+    active_filter = None
 
     # Auto-pull on open
     if gist_id:
@@ -695,9 +692,9 @@ def interactive():
                     if not push_ok:
                         print(f"\n  {BRIGHT_YELLOW}⚠{RESET}  Sync push failed: {DIM}{push_err}{RESET}")
             _clear()
-            print(f"\n  {BRIGHT_GREEN}  ┌─┤ ├─┐{RESET}")
+            print(f"\n  {BRIGHT_GREEN}  ┌─┤▪├─┐{RESET}")
             print(f"  {BRIGHT_GREEN}  │ ◕ ◕ │{RESET}  {DIM}See you later!{RESET}")
-            print(f"  {BRIGHT_GREEN}  └┬─┬─┬┘{RESET}\n")
+            print(f"  {BRIGHT_GREEN}  └─┤_├─┘{RESET}\n")
             break
         elif action == "a":
             if arg is not None:
@@ -717,27 +714,27 @@ def interactive():
                 }
                 tasks.append(task)
                 _save_tasks(tasks)
-                _redraw(f"  {BRIGHT_GREEN}✔{RESET} Added task {BRIGHT_MAGENTA}#{new_id}{RESET}: {BRIGHT_WHITE}{text.strip()}{RESET}\n")
+                _redraw(f"  {BRIGHT_GREEN}✔{RESET} Added task {BRIGHT_MAGENTA}#{new_id}{RESET}: {BRIGHT_WHITE}{text.strip()}{RESET}\n", tag_filter=active_filter)
             else:
-                _redraw()
+                _redraw(tag_filter=active_filter)
         elif action == "d":
             tasks = _load_tasks()
             pending = [t for t in tasks if not t["done"]]
             if not pending:
-                _redraw(f"  {BRIGHT_GREEN}✨ No pending tasks!{RESET}\n")
+                _redraw(f"  {BRIGHT_GREEN}✨ No pending tasks!{RESET}\n", tag_filter=active_filter)
                 continue
             if arg is not None:
                 tid_str = arg
             else:
-                _redraw()
+                _redraw(tag_filter=active_filter)
                 tid_str = _input_prompt("Which task did you finish? ID: ")
             if tid_str is None:
-                _redraw()
+                _redraw(tag_filter=active_filter)
                 continue
             try:
                 tid = int(tid_str.strip())
             except ValueError:
-                _redraw(f"  {BRIGHT_RED}✘{RESET}  Please enter a valid task ID.\n")
+                _redraw(f"  {BRIGHT_RED}✘{RESET}  Please enter a valid task ID.\n", tag_filter=active_filter)
                 continue
             tasks = _load_all_tasks()
             found = False
@@ -747,32 +744,32 @@ def interactive():
                 if t["id"] == tid:
                     found = True
                     if t["done"]:
-                        _redraw(f"  {BRIGHT_YELLOW}⚠{RESET}  Task {BRIGHT_MAGENTA}#{tid}{RESET} is already done.\n")
+                        _redraw(f"  {BRIGHT_YELLOW}⚠{RESET}  Task {BRIGHT_MAGENTA}#{tid}{RESET} is already done.\n", tag_filter=active_filter)
                     else:
                         t["done"] = True
                         t["modified"] = datetime.now().isoformat()
                         _save_tasks(tasks)
-                        _redraw(f"  {BRIGHT_GREEN}✔{RESET}  Nice! Completed {BRIGHT_MAGENTA}#{tid}{RESET}: {DIM}{STRIKE}{t['text']}{RESET}\n")
+                        _redraw(f"  {BRIGHT_GREEN}✔{RESET}  Nice! Completed {BRIGHT_MAGENTA}#{tid}{RESET}: {DIM}{STRIKE}{t['text']}{RESET}\n", tag_filter=active_filter)
                     break
             if not found:
-                _redraw(f"  {BRIGHT_RED}✘{RESET}  Task {BRIGHT_MAGENTA}#{tid}{RESET} not found.\n")
+                _redraw(f"  {BRIGHT_RED}✘{RESET}  Task {BRIGHT_MAGENTA}#{tid}{RESET} not found.\n", tag_filter=active_filter)
         elif action == "r":
             tasks = _load_tasks()
             if not tasks:
-                _redraw(f"  {DIM}No tasks to remove.{RESET}\n")
+                _redraw(f"  {DIM}No tasks to remove.{RESET}\n", tag_filter=active_filter)
                 continue
             if arg is not None:
                 tid_str = arg
             else:
-                _redraw()
+                _redraw(tag_filter=active_filter)
                 tid_str = _input_prompt("Which task to remove? ID: ")
             if tid_str is None:
-                _redraw()
+                _redraw(tag_filter=active_filter)
                 continue
             try:
                 tid = int(tid_str.strip())
             except ValueError:
-                _redraw(f"  {BRIGHT_RED}✘{RESET}  Please enter a valid task ID.\n")
+                _redraw(f"  {BRIGHT_RED}✘{RESET}  Please enter a valid task ID.\n", tag_filter=active_filter)
                 continue
             tasks = _load_all_tasks()
             found = False
@@ -784,21 +781,28 @@ def interactive():
                     t["deleted"] = True
                     t["modified"] = datetime.now().isoformat()
                     _save_tasks(tasks)
-                    _redraw(f"  {BRIGHT_RED}🗑{RESET}  Removed {BRIGHT_MAGENTA}#{tid}{RESET}: {DIM}{t['text']}{RESET}\n")
+                    _redraw(f"  {BRIGHT_RED}🗑{RESET}  Removed {BRIGHT_MAGENTA}#{tid}{RESET}: {DIM}{t['text']}{RESET}\n", tag_filter=active_filter)
                     break
             if not found:
-                _redraw(f"  {BRIGHT_RED}✘{RESET}  Task {BRIGHT_MAGENTA}#{tid}{RESET} not found.\n")
+                _redraw(f"  {BRIGHT_RED}✘{RESET}  Task {BRIGHT_MAGENTA}#{tid}{RESET} not found.\n", tag_filter=active_filter)
+        elif action == "f":
+            if arg:
+                active_filter = arg.strip().lstrip("#")
+                _redraw(f"  {BRIGHT_CYAN}▸{RESET}  Filtering by {BRIGHT_CYAN}#{active_filter}{RESET}\n", tag_filter=active_filter)
+            else:
+                active_filter = None
+                _redraw(f"  {DIM}Filter cleared{RESET}\n")
         elif action == "s":
             config = _load_config()
             if not config.get("gist_id"):
                 _setup_gist()
-                _redraw()
+                _redraw(tag_filter=active_filter)
             else:
                 push_ok, push_err = _sync_push()
                 if push_ok:
-                    _redraw(f"  {BRIGHT_GREEN}✔{RESET}  Synced to gist\n")
+                    _redraw(f"  {BRIGHT_GREEN}✔{RESET}  Synced to gist\n", tag_filter=active_filter)
                 else:
-                    _redraw(f"  {BRIGHT_RED}✘{RESET}  {push_err}\n")
+                    _redraw(f"  {BRIGHT_RED}✘{RESET}  {push_err}\n", tag_filter=active_filter)
         elif action == "l":
             config = _load_config()
             if config.get("gist_id"):
@@ -806,15 +810,15 @@ def interactive():
                 if ok:
                     pull_ok, pull_err = _sync_pull()
                     if pull_ok:
-                        _redraw(f"  {BRIGHT_GREEN}✔{RESET}  Synced from gist\n")
+                        _redraw(f"  {BRIGHT_GREEN}✔{RESET}  Synced from gist\n", tag_filter=active_filter)
                     else:
-                        _redraw(f"  {BRIGHT_YELLOW}⚠{RESET}  Pull failed: {DIM}{pull_err}{RESET}\n")
+                        _redraw(f"  {BRIGHT_YELLOW}⚠{RESET}  Pull failed: {DIM}{pull_err}{RESET}\n", tag_filter=active_filter)
                 else:
-                    _redraw()
+                    _redraw(tag_filter=active_filter)
             else:
-                _redraw()
+                _redraw(tag_filter=active_filter)
         else:
-            _redraw(f"  {DIM}Unknown option. Try again.{RESET}\n")
+            _redraw(f"  {DIM}Unknown option. Try again.{RESET}\n", tag_filter=active_filter)
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 def main():
